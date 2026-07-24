@@ -13,7 +13,7 @@ from app.schemas import CustomerInput, PredictionOutput
 class SegmentationPredictor:
     """Manages the lifecycle, preprocessing, and execution of the ML models."""
     def __init__(self):
-        self.scaler = None
+        self.preprocessor = None
         self.model = None
 
     def load_artifacts(self):
@@ -21,37 +21,36 @@ class SegmentationPredictor:
         if not os.path.exists(settings.PREPROCESSOR_PATH) or not os.path.exists(settings.MODEL_PATH):
             raise FileNotFoundError(
                 f"Model artifacts not found. Check pathing.\n"
-                f"Scaler: {settings.PREPROCESSOR_PATH}\nModel: {settings.MODEL_PATH}"
+                f"Preprocessor: {settings.PREPROCESSOR_PATH}\nModel: {settings.MODEL_PATH}"
             )
-        self.scaler = joblib.load(settings.PREPROCESSOR_PATH)
+        self.preprocessor = joblib.load(settings.PREPROCESSOR_PATH)
         self.model = joblib.load(settings.MODEL_PATH)
 
     def predict_segment(self, payload: CustomerInput) -> dict:
         """Processes raw user data and returns a structured cluster output."""
-        # Convert Pydantic payload to DataFrame with EXACT names expected by scaler
-        # Note: Using your notebook's column spellings: "Recency", "Frequency", "Monetory"
         input_df = pd.DataFrame(
-            [[payload.recency, payload.frequency, payload.monetary]],
-            columns=["Recency", "Frequency", "Monetory"]
+            [[payload.accountAgeDays, payload.paymentMethodAgeDays]],
+            columns=["accountAgeDays", "paymentMethodAgeDays"]
         )
         
         # Preprocess and scale data
-        scaled_data = self.scaler.transform(input_df)
+        scaled_data = self.preprocessor.transform(input_df)
         
         # Predict the numerical cluster label
-        cluster_id = int(self.model.predict(scaled_data)[0])
+        probabilities = self.model['model'].predict_proba(scaled_data)[:, 1]
+        predictions = (probabilities >= self.model['threshold']).astype(int).item()
+
         
         # Business logic mapping (matching your original app.py mapping)
-        cluster_mapping = {
-            0: "Loyal Customers",
-            1: "At-Risk Customers",
-            2: "VIP Customers"
+        mapping = {
+            0: "Non Fraud Transactions",
+            1: "Fraud Transactions"
         }
         
         # Defensive check for unexpected cluster outputs
-        segment_name = cluster_mapping.get(cluster_id, "Unknown Segment")
+        transactions = mapping.get(predictions, "Unknown Preediction")
         
-        return {"cluster": cluster_id, "segment_name": segment_name}
+        return {"prediction_class": predictions, "prediction": transactions}
 
 # Instantiate our global predictor instance
 predictor = SegmentationPredictor()
@@ -110,7 +109,6 @@ async def predict(payload: CustomerInput):
         result = predictor.predict_segment(payload)
         return result
     except Exception as e:
-        # If anything breaks mid-flight, catch it safely so the entire container doesn't die
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Inference pipeline failed: {str(e)}"

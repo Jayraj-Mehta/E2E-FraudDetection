@@ -21,5 +21,5 @@ class CustomerInput(BaseModel):
         }
 
 class PredictionOutput(BaseModel):
-    cluster: int
-    segment_name: str
+    prediction_class: int
+    prediction: str
